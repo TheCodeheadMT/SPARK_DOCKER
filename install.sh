@@ -20,6 +20,11 @@ main() {
   RAW="${SPARK_RAW_BASE:-https://raw.githubusercontent.com/TheCodeheadMT/SPARK_DOCKER/main}"
   HOME_DIR="${SPARK_HOME:-$HOME/spark}"
   CONTAINER=spark
+  # Always start from the user's own Docker settings: `spark update` runs this with
+  # DOCKER_CONFIG pointing at SPARK's private folder, which is rebuilt below.
+  user_cfg="${DOCKER_CONFIG:-$HOME/.docker}"
+  if [ "$user_cfg" = "$HOME_DIR/.docker-config" ]; then user_cfg="$HOME/.docker"; fi
+  export DOCKER_CONFIG="$user_cfg"
 
   if [ -t 1 ]; then B="$(printf '\033[1m')"; G="$(printf '\033[32m')"; Y="$(printf '\033[33m')"; R="$(printf '\033[31m')"; N="$(printf '\033[0m')"
   else B=; G=; Y=; R=; N=; fi
@@ -84,16 +89,16 @@ main() {
   # Docker left over from an uninstalled Docker Desktop can point at a credential
   # helper that no longer exists, which breaks image downloads. Use a clean config.
   rm -rf .docker-config
-  store="$(sed -n 's/.*"credsStore"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$HOME/.docker/config.json" 2>/dev/null | head -n 1)"
+  store="$(sed -n 's/.*"credsStore"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$user_cfg/config.json" 2>/dev/null | head -n 1)"
   if [ -n "$store" ] && ! command -v "docker-credential-$store" >/dev/null 2>&1; then
     warn "Docker is set to use a missing login helper (docker-credential-$store); SPARK uses its own Docker settings."
     ctx="$(docker context show 2>/dev/null || echo default)"
     mkdir -p .docker-config
     printf '{"currentContext": "%s"}\n' "$ctx" > .docker-config/config.json
-    [ -d "$HOME/.docker/contexts" ] && ln -s "$HOME/.docker/contexts" .docker-config/contexts
-    [ -d "$HOME/.docker/cli-plugins" ] && ln -s "$HOME/.docker/cli-plugins" .docker-config/cli-plugins
+    [ -d "$user_cfg/contexts" ] && ln -s "$user_cfg/contexts" .docker-config/contexts
+    [ -d "$user_cfg/cli-plugins" ] && ln -s "$user_cfg/cli-plugins" .docker-config/cli-plugins
   fi
-  [ -d .docker-config ] && export DOCKER_CONFIG="$HOME_DIR/.docker-config"
+  if [ -d .docker-config ]; then export DOCKER_CONFIG="$HOME_DIR/.docker-config"; fi
 
   # set_env KEY VALUE: set (or add) KEY in .env
   set_env() {
@@ -101,6 +106,7 @@ main() {
   }
   get_env() { sed -n "s/^$1=\([^ #]*\).*/\1/p" .env 2>/dev/null | head -n 1; }
   port_free() { curl -s -o /dev/null --connect-timeout 1 "http://127.0.0.1:$1/" ; [ $? -eq 7 ]; }
+  is_spark() { curl -fs --connect-timeout 2 "http://127.0.0.1:$1/api/health" 2>/dev/null | grep -q '"auth_mode"'; }
 
   running=false
   docker ps -q --filter "name=^/${CONTAINER}$" | grep -q . && running=true
@@ -123,7 +129,7 @@ main() {
   fi
   [ -n "${SPARK_REF:-}" ] && set_env SPARK_REF "$SPARK_REF"
   port="$(get_env SPARK_PORT)"; port="${port:-8000}"
-  if [ "$running" = false ] && ! port_free "$port"; then
+  if [ "$running" = false ] && ! port_free "$port" && ! is_spark "$port"; then
     die "Port $port is in use by another program. Set SPARK_PORT=<port> in $HOME_DIR/.env (or rerun with SPARK_PORT=8080), then run this again."
   fi
 

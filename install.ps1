@@ -114,7 +114,9 @@ function Install-Spark {
     }
     if ($env:SPARK_REF) { SetEnv 'SPARK_REF' $env:SPARK_REF }
     $port = GetEnv 'SPARK_PORT'; if (-not $port) { $port = 8000 }
-    if (-not $running -and -not (PortFree ([int]$port))) {
+    $isSpark = $false
+    try { $isSpark = ((Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:$port/api/health" -TimeoutSec 2 -ErrorAction Stop).Content -match '"auth_mode"') } catch { }
+    if (-not $running -and -not $isSpark -and -not (PortFree ([int]$port))) {
         Fail "Port $port is in use by another program. Set SPARK_PORT=<port> in $envFile, then run this again."
     }
 
