@@ -6,7 +6,11 @@ Desktop with Compose). No Python, Node or git.
 SPARK runs in **local mode**: no sign-in, you choose *Instructor mode* or *Admin mode* on
 the start page. It is only reachable from this computer.
 
-## First-time setup
+> **Most people should use the one-line installer** in the [main README](../../README.md#install):
+> it does everything below for you and adds a `spark` command. This page is the manual way,
+> and explains how the self-updating container works.
+
+## Manual setup
 
 1. Make a folder, e.g. `SPARK`, and download `docker-compose.yml` into it (or save it from
    this folder on GitHub):
@@ -72,13 +76,29 @@ port, demo courses, AI generation for Extra Instruction (`LLM_PROVIDER=openai` a
 
 ## How it works (for maintainers)
 
-The image built from `docker-compose.yml` contains only Python 3.11, Node 22, git and a
-small bootstrap script. On every start the bootstrap fetches `SPARK_REF` into the code
-volume and runs [`start.sh`](start.sh) from the fetched code, so the start logic updates
-with the app. `start.sh` reinstalls Python packages only when `backend/requirements.txt`
-changed, rebuilds the frontend only when `frontend/` changed (keeping the previous build if
-a build fails), creates a `SECRET_KEY` once in `spark-data/.secret_key`, and starts uvicorn,
-which serves the API and the built app on one port.
+| File | Role | Reaches users |
+|---|---|---|
+| [`install.sh`](../../install.sh), [`install.ps1`](../../install.ps1) | One-line installers: check Docker, download the two files below into `~/spark`, write `.env`, add the `spark` command, start and wait until healthy | Each time someone runs the install command or `spark update` |
+| [`docker-compose.yml`](docker-compose.yml) | The service: port (127.0.0.1 only), settings, data folder, code volume | Same as above (the installer downloads it) |
+| [`Dockerfile`](Dockerfile), [`bootstrap.sh`](bootstrap.sh) | The image: Python 3.11, Node 22, git and the bootstrap. Built by Compose straight from this folder on GitHub (`main`) | When the image is rebuilt: `spark update`, or `docker compose up -d --build` |
+| [`start.sh`](start.sh) | Prepares and starts the app | **Every container start** |
 
-Changes to the bootstrap itself (in `docker-compose.yml`) reach users only when they get a
-new copy of that file and run `docker compose up -d --build`, so keep it small.
+On every start the bootstrap fetches `SPARK_REF` into the code volume and runs `start.sh`
+from the fetched code, so the start logic updates with the app. `start.sh` reinstalls Python
+packages only when `backend/requirements.txt` changed, rebuilds the frontend only when
+`frontend/` changed (keeping the previous build if a build fails), creates a `SECRET_KEY`
+once in `spark-data/.secret_key`, and starts uvicorn, which serves the API and the built app
+on one port.
+
+Put changes in `start.sh` where possible: everything else only reaches people when they
+update. The image is built from a file on GitHub rather than inline in the compose file
+because Compose 5.x passes builds through `buildx bake`, which expands `$` in
+`dockerfile_inline` a second time.
+
+To test changes before pushing, point the installer at a local checkout:
+
+```bash
+curl -fsSL file://$PWD/install.sh | SPARK_RAW_BASE=file://$PWD SPARK_BUILD_CONTEXT=$PWD/deploy/local SPARK_HOME=/tmp/spark-test sh
+```
+
+(`SPARK_REPO_URL` and `SPARK_REF` in `.env` choose where the app code itself comes from.)
