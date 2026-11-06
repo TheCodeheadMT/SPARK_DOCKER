@@ -1,0 +1,6 @@
+# /etc/fstab  -- one line. Replace the URL with your Content Collection WebDAV address for the SPARK folder.
+# ro                        never write to Blackboard
+# noauto,x-systemd.automount  mount on first access, and retry on the next access if it failed
+# _netdev                   wait for the network at boot
+# uid/gid/file_mode/dir_mode  only the spark service user can read the exports
+https://bb.example.edu/bbcswebdav/institution/SPARK  /mnt/bb/SPARK  davfs  ro,_netdev,noauto,x-systemd.automount,x-systemd.mount-timeout=60,uid=spark,gid=spark,file_mode=0440,dir_mode=0550  0  0

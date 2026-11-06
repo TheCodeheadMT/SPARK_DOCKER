@@ -1,0 +1,24 @@
+services:
+  spark:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: spark-bb:latest
+    container_name: spark-bb
+    ports:
+      - "8000:8000"
+    environment:
+      - ENV=development
+      - AUTH_MODE=simulated
+      - SECRET_KEY=dev-only-change-me
+      - DATA_DIR=/app/var
+      - BB_ROOT=/app/dev_share
+      - ENABLE_FIXTURES=true
+      - UPLOADS_ENABLED=true
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./var:/app/var
+      - ./dev_share:/app/dev_share:ro
+    restart: unless-stopped

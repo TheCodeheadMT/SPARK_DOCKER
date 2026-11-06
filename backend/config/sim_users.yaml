@@ -1,0 +1,47 @@
+# Simulated Microsoft 365 / Entra ID personas (AUTH_MODE=simulated only).
+#
+# Each persona produces the same claims a real Entra ID token would carry
+# (oid, tid, preferred_username, name, roles, groups). When real O365 sign-in is
+# switched on, these claims come from Microsoft instead and nothing else changes.
+#
+# courses: course IDs this persona can open ("*" = all, admins only).
+# roles:   app roles -> Instructor | CourseDirector | Admin
+
+tenant_id: 00000000-0000-0000-0000-00000000sim1
+
+personas:
+  - key: instructor
+    oid: 11111111-1111-1111-1111-111111111111
+    name: Instructor Alpha (simulated)
+    preferred_username: instructor.alpha@spark.test
+    roles: [Instructor]
+    groups: [sg-spark-instructors]
+    courses: ["bb:202620-DEMO-CS101", "fixture:DEMO001"]
+    description: Teaches the Blackboard course and one demo course.
+
+  - key: director
+    oid: 22222222-2222-2222-2222-222222222222
+    name: Course Director Bravo (simulated)
+    preferred_username: director.bravo@spark.test
+    roles: [CourseDirector]
+    groups: [sg-spark-directors]
+    courses: ["bb:202620-DEMO-CS101", "fixture:DEMO001", "fixture:DEMO002"]
+    description: Oversees all sections of the Blackboard course and both demo courses.
+
+  - key: admin
+    oid: 33333333-3333-3333-3333-333333333333
+    name: Admin Charlie (simulated)
+    preferred_username: admin.charlie@spark.test
+    roles: [Admin]
+    groups: [sg-spark-admins]
+    courses: ["*"]
+    description: Sees every course and can run course discovery.
+
+  - key: noaccess
+    oid: 44444444-4444-4444-4444-444444444444
+    name: Faculty Delta (simulated)
+    preferred_username: faculty.delta@spark.test
+    roles: [Instructor]
+    groups: [sg-spark-instructors]
+    courses: []
+    description: Valid sign-in with no course access (tests the empty state and 403s).

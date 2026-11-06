@@ -1,0 +1,19 @@
+# Optional: run the poller as its own service instead of inside the API.
+# If you use this, set BB_POLL_INTERVAL_S=0 in the API's environment.
+[Unit]
+Description=SPARK Blackboard export poller
+After=network-online.target mnt-bb-SPARK.automount
+Wants=network-online.target
+
+[Service]
+User=spark
+Group=spark
+WorkingDirectory=/opt/spark/backend
+EnvironmentFile=/opt/spark/.env
+Environment=BB_POLL_INTERVAL_S=300
+ExecStart=/opt/spark/.venv/bin/python -m spark_api.poller
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,8 @@
+[Unit]
+Description=Check the SPARK Blackboard WebDAV mount and remount if it is hung
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/spark-mount-check.sh

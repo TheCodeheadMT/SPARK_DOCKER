@@ -1,0 +1,14 @@
+var/
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+frontend/node_modules/
+frontend/dist/
+.env
+*.duckdb
+*.duckdb.tmp
+*Zone.Identifier*
+spark-data/
+frontend/.vite/
+.DS_Store

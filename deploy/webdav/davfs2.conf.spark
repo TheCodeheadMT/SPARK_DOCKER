@@ -1,0 +1,23 @@
+# Append to /etc/davfs2/davfs2.conf on the SPARK server.
+# The [section] applies only to the SPARK mount; other davfs2 mounts are unaffected.
+# Keep comments on their own lines.
+
+[/mnt/bb/SPARK]
+# Read-only: never lock files on the Blackboard server.
+use_locks       0
+# Never prompt; credentials come from /etc/davfs2/secrets.
+ask_auth        0
+# Seconds a folder listing is cached. New exports show up within this time.
+dir_refresh     60
+# Seconds before a cached file is re-checked with the server.
+file_refresh    1
+connect_timeout 10
+read_timeout    30
+# Back-off after the server stops answering, growing to at most 5 minutes.
+retry           30
+max_retry       300
+# MiB of local cache for exports.
+cache_size      500
+# Required for davfs2 1.7.0 and 1.7.1 on newer kernels (Ubuntu 24.04 and later):
+# without it every folder listing fails with "Invalid argument". Harmless on 1.7.2+.
+buf_size        64

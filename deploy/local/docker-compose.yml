@@ -1,0 +1,98 @@
+# SPARK local release: runs SPARK on this computer with only Docker installed.
+#
+#   docker compose up -d        start (first start takes a few minutes), then open http://localhost:8000
+#   docker compose restart      restart and update to the latest version
+#   docker compose down         stop
+#
+# Every time the container starts it pulls the latest code from the repository
+# (SPARK_REF, default main), rebuilds what changed and starts the app. Without a
+# connection it starts the version it pulled last. Settings go in a .env file next
+# to this one (see .env.example). Your data is kept in ./spark-data.
+#
+# Local mode has no sign-in, so the app is only reachable from this computer
+# (127.0.0.1). Do not change that to share it on a network.
+
+name: spark
+
+services:
+  spark:
+    image: spark-local:bootstrap
+    build:
+      context: .
+      # Kept inline so this file is all a user needs. The image holds only the tools
+      # (Python, Node, git) and a small bootstrap; the app itself comes from the
+      # repository on each start, and deploy/local/start.sh there does the rest.
+      # ($$ is a literal $ for the shell; a single $ would be read by Compose.)
+      dockerfile_inline: |
+        # syntax=docker/dockerfile:1
+        FROM node:22-bookworm-slim AS node
+        FROM python:3.11-slim-bookworm
+        RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
+            && rm -rf /var/lib/apt/lists/*
+        COPY --from=node /usr/local/bin/node /usr/local/bin/node
+        COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
+        RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+            && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
+            && node --version && npm --version
+        COPY --chmod=755 <<'EOF' /usr/local/bin/spark-bootstrap
+        #!/bin/sh
+        # Pull the latest SPARK code, then hand over to the repository's start script.
+        set -u
+        SRC=/opt/spark/src
+        URL="$${SPARK_REPO_URL:-https://github.com/TheCodeheadMT/SPARK_DOCKER.git}"
+        REF="$${SPARK_REF:-main}"
+        # Only needed if SPARK_REPO_URL points at a private repository: a read-only token. It is sent as a header and
+        # never written to disk.
+        if [ -n "$${GIT_TOKEN:-}" ]; then
+          AUTH=$$(printf 'x-access-token:%s' "$$GIT_TOKEN" | base64 -w0)
+          set -- -c "http.extraHeader=Authorization: Basic $$AUTH"
+        else
+          set --
+        fi
+        mkdir -p "$$SRC"
+        git config --global --add safe.directory "$$SRC"
+        [ -d "$$SRC/.git" ] || git -C "$$SRC" init -q
+        git -C "$$SRC" remote remove origin 2>/dev/null
+        git -C "$$SRC" remote add origin "$$URL"
+        echo "[spark] checking $$URL ($$REF) for updates"
+        if git "$$@" -C "$$SRC" fetch -q --depth 1 origin "$$REF" \
+            && git -C "$$SRC" reset -q --hard FETCH_HEAD; then
+          echo "[spark] up to date: $$(git -C "$$SRC" log -1 --format='%h %s')"
+        elif [ -f "$$SRC/deploy/local/start.sh" ]; then
+          echo "[spark] WARNING: could not update (offline, or no access to the repository); starting the last version pulled"
+        else
+          echo "[spark] ERROR: could not download SPARK from $$URL ($$REF)." >&2
+          echo "[spark] Check the internet connection and SPARK_REF." >&2
+          sleep 30
+          exit 1
+        fi
+        exec bash "$$SRC/deploy/local/start.sh"
+        EOF
+        ENV SPARK_SRC=/opt/spark/src SPARK_CACHE=/opt/spark/cache
+        EXPOSE 8000
+        HEALTHCHECK --interval=30s --timeout=5s --start-period=15m --retries=3 \
+            CMD python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=4)"
+        CMD ["spark-bootstrap"]
+    container_name: spark
+    ports:
+      - "127.0.0.1:${SPARK_PORT:-8000}:8000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Fixed for the local release (these override .env):
+      ENV: development
+      AUTH_MODE: local
+      DATA_DIR: /data
+      SPARK_ENV_FILE: none
+      # Defaults you can change in .env:
+      BB_ROOT: ${BB_ROOT:-}                       # empty = upload exports in the app (no WebDAV)
+      UPLOADS_ENABLED: ${UPLOADS_ENABLED:-true}
+      ENABLE_FIXTURES: ${ENABLE_FIXTURES:-false}  # true = add the two synthetic demo courses
+    volumes:
+      - ./spark-data:/data     # courses, uploads, settings DB: back this folder up
+      - spark-code:/opt/spark  # downloaded code, Python packages and web build (safe to delete)
+    restart: unless-stopped
+
+volumes:
+  spark-code:
