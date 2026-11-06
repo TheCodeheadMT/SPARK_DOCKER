@@ -32,8 +32,46 @@ function Install-Spark {
     function Fail($m) { Write-Host "  x $m" -ForegroundColor Red; throw 'SPARK installation stopped.' }
     function DockerOk { & docker info *> $null; return ($LASTEXITCODE -eq 0) }
     function PortFree([int]$p) {
+        # Connect with a time limit: security software can make a plain Connect() wait a long time
         $c = New-Object Net.Sockets.TcpClient
-        try { $c.Connect('127.0.0.1', $p); return $false } catch { return $true } finally { $c.Close() }
+        try { $t = $c.ConnectAsync('127.0.0.1', $p); if ($t.Wait(1500)) { return -not $c.Connected }; return $true }
+        catch { return $true } finally { $c.Close() }
+    }
+    function LocalGet([int]$p, [string]$path, [int]$ms) {
+        # HTTP to this computer: never through a proxy (Invoke-WebRequest in Windows PowerShell 5.1
+        # can send even 127.0.0.1 to the system proxy) and with a hard time limit. $null on any failure.
+        try {
+            $r = [Net.HttpWebRequest]::Create("http://127.0.0.1:$p$path")
+            $r.Proxy = $null; $r.Timeout = $ms; $r.ReadWriteTimeout = $ms
+            $resp = $r.GetResponse()
+            try { return (New-Object IO.StreamReader($resp.GetResponseStream())).ReadToEnd() } finally { $resp.Close() }
+        } catch { return $null }
+    }
+    function SetUserPath([string]$dir, [bool]$add) {
+        # Edit the user's Path in the registry directly. [Environment]::SetEnvironmentVariable(...,'User')
+        # waits for every open window to acknowledge the change and can hang for minutes; it also
+        # rewrites the value as plain text, which breaks entries like %USERPROFILE%\bin.
+        if ($env:OS -ne 'Windows_NT') { return }
+        $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
+        try {
+            $cur = [string]$key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+            $parts = @($cur -split ';' | Where-Object { $_ -and $_ -ne $dir })
+            if ($add) { $parts += $dir }
+            $new = $parts -join ';'
+            if ($new -eq $cur) { return }
+            $key.SetValue('Path', $new, [Microsoft.Win32.RegistryValueKind]::ExpandString)
+        } finally { $key.Close() }
+        # Tell Windows the environment changed, skipping windows that don't respond (at most ~2 s).
+        try {
+            if (-not ('SparkInstall.Env' -as [type])) {
+                Add-Type -Namespace SparkInstall -Name Env -MemberDefinition @"
+[System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+public static extern System.IntPtr SendMessageTimeout(System.IntPtr hWnd, uint msg, System.UIntPtr wParam, string lParam, uint flags, uint timeout, out System.UIntPtr result);
+"@
+            }
+            $res = [UIntPtr]::Zero
+            [void][SparkInstall.Env]::SendMessageTimeout([IntPtr]0xffff, 0x1A, [UIntPtr]::Zero, 'Environment', 2, 2000, [ref]$res)
+        } catch { }   # not essential: terminals opened later still pick up the change
     }
     function WriteUtf8([string]$path, [string]$text) {
         # UTF-8 without BOM and LF endings, so Docker Compose reads the file correctly
@@ -75,8 +113,9 @@ function Install-Spark {
     Push-Location $HomeDir
     Say "Installing to $HomeDir"
     try {
-        Invoke-WebRequest -UseBasicParsing "$Raw/deploy/local/docker-compose.yml" -OutFile 'docker-compose.yml.new' -ErrorAction Stop
-        Invoke-WebRequest -UseBasicParsing "$Raw/deploy/local/.env.example" -OutFile '.env.example' -ErrorAction Stop
+        Write-Host '    downloading docker-compose.yml and .env.example'
+        Invoke-WebRequest -UseBasicParsing "$Raw/deploy/local/docker-compose.yml" -OutFile 'docker-compose.yml.new' -TimeoutSec 60 -ErrorAction Stop
+        Invoke-WebRequest -UseBasicParsing "$Raw/deploy/local/.env.example" -OutFile '.env.example' -TimeoutSec 60 -ErrorAction Stop
     } catch { Fail "Could not download SPARK. Check the internet connection. ($($_.Exception.Message))" }
     Move-Item -Force 'docker-compose.yml.new' 'docker-compose.yml'
 
@@ -95,12 +134,14 @@ function Install-Spark {
         return $null
     }
 
+    Write-Host '    checking for a running SPARK'
     $running = [bool](& docker ps -q --filter "name=^/$Container$")
     if (-not (Test-Path $envFile)) {
         WriteUtf8 $envFile ([IO.File]::ReadAllText((Join-Path $HomeDir '.env.example')))
         $port = $env:SPARK_PORT
         if (-not $port) {
             $port = 8000
+            Write-Host '    finding a free port'
             while (-not (PortFree $port)) {
                 $port++
                 if ($port -gt 8100) { Fail 'No free port between 8000 and 8100. Set one with $env:SPARK_PORT = "..."' }
@@ -114,13 +155,14 @@ function Install-Spark {
     }
     if ($env:SPARK_REF) { SetEnv 'SPARK_REF' $env:SPARK_REF }
     $port = GetEnv 'SPARK_PORT'; if (-not $port) { $port = 8000 }
-    $isSpark = $false
-    try { $isSpark = ((Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:$port/api/health" -TimeoutSec 2 -ErrorAction Stop).Content -match '"auth_mode"') } catch { }
+    Write-Host "    checking port $port"
+    $isSpark = [bool]((LocalGet ([int]$port) '/api/health' 2000) -match '"auth_mode"')
     if (-not $running -and -not $isSpark -and -not (PortFree ([int]$port))) {
         Fail "Port $port is in use by another program. Set SPARK_PORT=<port> in $envFile, then run this again."
     }
 
     # --- 3. The 'spark' command -------------------------------------------------------------
+    Write-Host '    adding the spark command'
     $ctl = @'
 # SPARK control command (created by the installer). Run: spark help
 param([string]$Command = 'help')
@@ -139,8 +181,11 @@ switch ($Command) {
     'open'      { Start-Process $url }
     'uninstall' {
         docker compose down -v --rmi all
-        $p = [Environment]::GetEnvironmentVariable('Path', 'User')
-        [Environment]::SetEnvironmentVariable('Path', (($p -split ';') | Where-Object { $_ -and $_ -ne $HomeDir }) -join ';', 'User')
+        # registry edit, not [Environment]::SetEnvironmentVariable (which can hang; see install.ps1)
+        $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
+        $cur = [string]$key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+        $key.SetValue('Path', (@($cur -split ';' | Where-Object { $_ -and $_ -ne $HomeDir }) -join ';'), [Microsoft.Win32.RegistryValueKind]::ExpandString)
+        $key.Close()
         Write-Host "SPARK removed. Your data is still in $HomeDir\spark-data; delete $HomeDir to remove everything."
     }
     default {
@@ -162,11 +207,9 @@ Usage: spark <command>
     # spark.cmd lets `spark` work from cmd and PowerShell regardless of the script execution policy
     [IO.File]::WriteAllText((Join-Path $HomeDir 'spark.cmd'),
         "@echo off`r`npowershell -NoProfile -ExecutionPolicy Bypass -File `"%~dp0spark.ps1`" %*`r`n")
-    $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-    if (-not (($userPath -split ';') -contains $HomeDir)) {
-        [Environment]::SetEnvironmentVariable('Path', ((@($userPath -split ';' | Where-Object { $_ }) + $HomeDir) -join ';'), 'User')
-        $env:Path = "$env:Path;$HomeDir"
-    }
+    SetUserPath $HomeDir $true
+    if (-not (($env:Path -split ';') -contains $HomeDir)) { $env:Path = "$env:Path;$HomeDir" }
+    Ok "spark command added"
 
     # --- 4. Start ---------------------------------------------------------------------------
     Say 'Starting SPARK (the first start downloads and builds everything: about 3-5 minutes)'
@@ -184,7 +227,7 @@ Usage: spark <command>
             $lines[$shown..($lines.Count - 1)] | ForEach-Object { Write-Host ('   ' + $_.Substring(7).Trim()) }
             $shown = $lines.Count
         }
-        try { Invoke-WebRequest -UseBasicParsing "$url/api/health" -TimeoutSec 3 -ErrorAction Stop | Out-Null; break } catch { }
+        if (LocalGet ([int]$port) '/api/health' 3000) { break }
         $state = (& docker inspect -f '{{.State.Status}}' $Container 2>$null)
         if ($state -ne 'running' -and $state -ne 'created') {
             & docker logs --tail 30 $Container 2>&1 | ForEach-Object { Write-Host "$_" }
