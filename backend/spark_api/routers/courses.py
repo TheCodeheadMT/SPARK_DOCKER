@@ -165,7 +165,7 @@ def student(course_id: str, student_id: str, request: Request,
     _audit(db, ctx.user, "view_student", course_id, student_id)
     cols = ["ASSIGNMENT_ID", "ASSIGNMENT", "ASSIGNMENT_GROUP_ID", "DUE_AT", "DUE_SOURCE", "SUBMITTED_AT",
             "GRADED_AT", "POINTS_EARNED", "POINTS_POSSIBLE", "PERCENTAGE", "LATE", "MISSED_ASSIGNMENT",
-            "SUBMISSION_DELTA_DAYS"]
+            "SUBMISSION_DELTA_DAYS", *queries.TIMELINE_FIELDS]
     return {**prof, "assignments": queries.records(rows[cols])}
 
 

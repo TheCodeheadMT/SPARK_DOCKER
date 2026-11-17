@@ -99,6 +99,7 @@ def roster(rng: random.Random) -> list[dict]:
 
 def main() -> None:
     rng = random.Random(SEED)
+    extra = random.Random(SEED + 1)     # earlier attempts only; see the online-item loop
     students = roster(rng)
     scores: dict[tuple[str, str], str] = {}
     hist: list[dict] = []
@@ -159,10 +160,20 @@ def main() -> None:
             if on_time:
                 t = due - timedelta(minutes=rng.randint(5, 6 * 24 * 60))
                 v = earn(stu, pts)
-                event(t + timedelta(seconds=rng.randint(1, 40)), name, cat, (f"{stu['first']} {stu['last']}",
-                      stu["username"]), "S", stu, "Grade", f"{v:g}", "Attempt submitted (auto graded)",
-                      str(rng.randint(1, 3)), "%030x" % rng.getrandbits(120), t)
+                graded_at = t + timedelta(seconds=rng.randint(1, 40))
+                n = rng.randint(1, 3)
+                me = (f"{stu['first']} {stu['last']}", stu["username"])
+                event(graded_at, name, cat, me, "S", stu, "Grade", f"{v:g}", "Attempt submitted (auto graded)",
+                      str(n), "%030x" % rng.getrandbits(120), t)
                 scores[(stu["username"], name)] = fmt_score(v)
+                # Earlier attempts (for the assignment timeline). They use their own random stream so
+                # every score and time above stays exactly as it was before they were added.
+                prev = t
+                for k in range(n - 1, 0, -1):
+                    prev -= timedelta(minutes=extra.randint(30, 36 * 60))
+                    pv = round(pts * extra.uniform(0.3, 0.9) * 2) / 2
+                    event(prev + timedelta(seconds=extra.randint(1, 40)), name, cat, me, "S", stu, "Grade",
+                          f"{pv:g}", "Attempt submitted (auto graded)", str(k), "%030x" % extra.getrandbits(120), prev)
                 continue
             # missed the deadline: Ultra writes an automatic zero just after it closes
             event(burst + timedelta(seconds=rng.randint(0, 90)), name, cat, SYSTEM, "", stu, "Override", "0",

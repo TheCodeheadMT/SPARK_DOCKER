@@ -29,6 +29,21 @@ class CourseData:
     submissions: pd.DataFrame   # STUDENT_ID, ASSIGNMENT_ID, POINTS_EARNED, SUBMITTED_AT, GRADED_AT, LATE
     source_version: str         # hash of the inputs; same inputs -> same version
     report: dict = field(default_factory=dict)   # validation notes shown in the UI
+    # Optional, for the assignment timeline: STUDENT_ID, ASSIGNMENT_ID, FIRST_ATTEMPT_AT, LAST_ATTEMPT_AT, ATTEMPTS.
+    # assignments may also carry ASSIGNED_AT and ASSIGNED_SOURCE. Adapters without them leave these out.
+    attempts: pd.DataFrame | None = None
+
+
+ATTEMPT_COLUMNS = ["STUDENT_ID", "ASSIGNMENT_ID", "FIRST_ATTEMPT_AT", "LAST_ATTEMPT_AT", "ATTEMPTS"]
+
+
+def empty_attempts() -> pd.DataFrame:
+    """CourseData.attempts with no rows, typed so DuckDB gets the right column types."""
+    return pd.DataFrame({
+        "STUDENT_ID": pd.Series(dtype="string"), "ASSIGNMENT_ID": pd.Series(dtype="string"),
+        "FIRST_ATTEMPT_AT": pd.Series(dtype="datetime64[ns]"), "LAST_ATTEMPT_AT": pd.Series(dtype="datetime64[ns]"),
+        "ATTEMPTS": pd.Series(dtype="Int64"),
+    })
 
 
 class LMSAdapter(Protocol):

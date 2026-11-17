@@ -3,6 +3,7 @@ import { lazy, Suspense } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { api, type Preferences } from '../api'
 import { RiskPill } from '../components/CourseNav'
+import AssignmentTimeline from '../components/AssignmentTimeline'
 import FigureCard from '../components/FigureCard'
 
 // Plotly is ~4.5 MB; load it only when a chart is on screen.
@@ -113,10 +114,19 @@ export default function StudentPage() {
 
       <div className="card">
         <h3>Assignments</h3>
+        <p className="tl-legend muted small" aria-hidden="true">
+          <span><span className="timeline"><span className="tl-tick tl-assigned" /></span>assigned</span>
+          <span><span className="timeline"><span className="tl-dot tl-first" /></span>first attempt</span>
+          <span><span className="timeline"><span className="tl-dot tl-submitted on-time" /></span>submitted on time</span>
+          <span><span className="timeline"><span className="tl-dot tl-submitted late" /></span>late</span>
+          <span><span className="timeline"><span className="tl-tick tl-due" /></span>due</span>
+          <span>Hover a bar for exact times. Blackboard exports have no release or start times: assigned is
+            estimated from the class's first submission unless the course manifest gives it.</span>
+        </p>
         <div className="table-wrap">
           <table>
             <thead>
-              <tr><th>Item</th><th>Category</th><th>Due</th><th>Submitted</th><th className="num">Score</th><th>Status</th></tr>
+              <tr><th>Item</th><th>Category</th><th>Due</th><th>Submitted</th><th>Timeline</th><th className="num">Score</th><th>Status</th></tr>
             </thead>
             <tbody>
               {assignments.map((a) => {
@@ -131,6 +141,7 @@ export default function StudentPage() {
                       {a.DUE_SOURCE === 'manifest' && <span className="tag">manifest</span>}
                     </td>
                     <td>{a.SUBMITTED_AT ? fmtDate(a.SUBMITTED_AT) : <span className="muted">no submit time</span>}</td>
+                    <td className="timeline-cell"><AssignmentTimeline a={a} /></td>
                     <td className="num">{a.POINTS_EARNED} / {a.POINTS_POSSIBLE}</td>
                     <td>
                       {a.MISSED_ASSIGNMENT ? <span className="pill bad">missed</span>

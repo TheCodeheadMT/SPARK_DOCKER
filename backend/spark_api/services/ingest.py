@@ -14,7 +14,7 @@ from pathlib import Path
 import pandas as pd
 from sqlalchemy import select
 
-from adapters.base import CourseRef, LMSAdapter
+from adapters.base import CourseRef, LMSAdapter, empty_attempts
 from spark_api.db import Course, Database, IngestRun, utcnow
 from spark_core.etl.store import course_db_path, write_course_db
 from spark_core.etl.transform import transform_data
@@ -25,7 +25,8 @@ log = logging.getLogger("spark.ingest")
 _locks: dict[str, threading.Lock] = defaultdict(threading.Lock)
 
 # Bump when build_tables() output changes, so unchanged inputs still get rebuilt once.
-SCHEMA_VERSION = 3   # 3: no-section rows dropped; current-grade fallback
+SCHEMA_VERSION = 4   # 3: no-section rows dropped; current-grade fallback. 4: assigned dates, SUBMISSION_ATTEMPTS
+TIMELINE_COLUMNS = ["ASSIGNED_AT", "ASSIGNED_SOURCE"]
 
 
 class IngestBusy(Exception):
@@ -40,17 +41,24 @@ def snapshot_time(perf: pd.DataFrame) -> pd.Timestamp | None:
 
 def build_tables(course_id: str, data) -> tuple[dict[str, pd.DataFrame], dict]:
     perf = transform_data({
-        "assignments": data.assignments.drop(columns=["DUE_SOURCE"], errors="ignore"),
+        "assignments": data.assignments.drop(columns=["DUE_SOURCE", *TIMELINE_COLUMNS], errors="ignore"),
         "students": data.students[["STUDENT_ID", "STUDENT_NAME"]],
         "submissions": data.submissions,
     })
     perf["COURSE_ID"] = course_id
+    assignments = data.assignments.copy()
+    if "ASSIGNED_AT" not in assignments:
+        assignments["ASSIGNED_AT"] = pd.Series(pd.NaT, index=assignments.index, dtype="datetime64[ns]")
+    if "ASSIGNED_SOURCE" not in assignments:
+        assignments["ASSIGNED_SOURCE"] = "none"
+    attempts = data.attempts if data.attempts is not None else empty_attempts()
     tables = {
         "DIM_SECTIONS": data.sections,
         "DIM_STUDENTS": data.students,
         "FACT_ENROLLMENTS": data.enrollments,
-        "DIM_ASSIGNMENTS": data.assignments,
+        "DIM_ASSIGNMENTS": assignments,
         "STUDENT_PERFORMANCE": perf,
+        "SUBMISSION_ATTEMPTS": attempts,
     }
     extra: dict = {"schema": SCHEMA_VERSION}
     if not perf.empty:

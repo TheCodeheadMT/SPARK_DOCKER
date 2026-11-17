@@ -26,6 +26,11 @@ Decisions encoded here (from the first real export, Nov 2026):
   * DUE_AT is inferred from Ultra's automatic-zero burst: system edits (empty role) with
     value 0 right after an item closes. Rounded back to 23:59 of the prior day when the
     burst lands just after midnight. A manifest can override (DUE_SOURCE records which).
+  * Neither export says when an item was released or when a student opened it. ASSIGNED_AT comes
+    from the manifest's optional ASSIGNED_AT column, else it is estimated as the earliest student
+    submission in the class (ASSIGNED_SOURCE records which). Per student, the earliest and latest
+    "Attempt Activity" and the attempt count go to the separate `attempts` frame; the first
+    attempt is the closest thing to a start time the exports have.
   * "Needs Grading" / blank cells are excluded from submissions (not counted as zeros).
     Items nobody has a score for yet are treated as not yet active and skipped.
 """
@@ -38,6 +43,8 @@ from datetime import timedelta
 from pathlib import Path
 
 import pandas as pd
+
+from adapters.base import ATTEMPT_COLUMNS, empty_attempts
 
 HEADER_RE = re.compile(
     r"^(?P<name>.*?)\s*\[Total Pts:\s*(?P<upto>up to\s+)?(?P<pts>[\d.]+)\s+(?P<disp>[^\]]+)\]\s*\|(?P<id>\d+)\s*$"
@@ -153,6 +160,22 @@ def infer_due_dates(hist: pd.DataFrame, min_events: int = 1) -> pd.DataFrame:
     ]
 
 
+def student_attempts(stu_sub: pd.DataFrame) -> pd.DataFrame:
+    """Per student + column: first and last attempt time and how many attempts.
+
+    The count is the highest Submission Attempt Number seen, or the number of distinct attempt
+    times if that is larger (an export may list only the last of several attempts).
+    """
+    if stu_sub.empty:
+        return pd.DataFrame(columns=["Username", "Column", "FIRST_ATTEMPT_AT", "LAST_ATTEMPT_AT", "ATTEMPTS"])
+    s = stu_sub.assign(_n=pd.to_numeric(stu_sub["Submission Attempt Number"], errors="coerce"))
+    g = s.groupby(["Username", "Column"]).agg(
+        FIRST_ATTEMPT_AT=("Attempt Activity", "min"), LAST_ATTEMPT_AT=("Attempt Activity", "max"),
+        _times=("Attempt Activity", "nunique"), _maxn=("_n", "max")).reset_index()
+    g["ATTEMPTS"] = g[["_times", "_maxn"]].max(axis=1).fillna(1).astype("Int64")
+    return g.drop(columns=["_times", "_maxn"])
+
+
 # ---------------------------------------------------------------------------
 # Course assembly
 # ---------------------------------------------------------------------------
@@ -252,26 +275,57 @@ def parse_course(
                     .rename("ASSIGNMENT_GROUP_ID").reset_index())
         due = infer_due_dates(hist)
         due["DUE_SOURCE"] = "inferred_auto_zero"
+        attempts_raw = student_attempts(stu_sub)
+        assigned = (stu_sub.groupby("Column")["Attempt Activity"].min().rename("ASSIGNED_AT").reset_index()
+                    .rename(columns={"Column": "ASSIGNMENT_NAME"}))
+        assigned["ASSIGNED_SOURCE"] = "estimated_first_submission"
     else:
         submitted = pd.DataFrame(columns=["Username", "Column", "SUBMITTED_AT"])
         graded = pd.DataFrame(columns=["Username", "Column", "GRADED_AT"])
         category = pd.DataFrame(columns=["Column", "ASSIGNMENT_GROUP_ID"])
         due = pd.DataFrame(columns=["ASSIGNMENT_NAME", "DUE_AT", "AUTO_ZERO_EVENTS", "DUE_SOURCE"])
+        attempts_raw = student_attempts(pd.DataFrame())
+        assigned = pd.DataFrame(columns=["ASSIGNMENT_NAME", "ASSIGNED_AT", "ASSIGNED_SOURCE"])
 
-    if manifest is not None and not manifest.empty:
-        m = manifest[["ASSIGNMENT_NAME", "DUE_AT"]].copy()
-        m["DUE_AT"] = pd.to_datetime(m["DUE_AT"], errors="coerce")
-        m["DUE_SOURCE"] = "manifest"
-        due = pd.concat([m, due[~due["ASSIGNMENT_NAME"].isin(m["ASSIGNMENT_NAME"])]], ignore_index=True)
+    # Manifest: ASSIGNMENT_NAME plus DUE_AT and/or ASSIGNED_AT. A blank cell keeps the value from the exports.
+    if manifest is not None and not manifest.empty and "ASSIGNMENT_NAME" in manifest:
+        if "DUE_AT" in manifest:
+            m = manifest[["ASSIGNMENT_NAME", "DUE_AT"]].copy()
+            m["DUE_AT"] = pd.to_datetime(m["DUE_AT"], errors="coerce")
+            m = m[m["DUE_AT"].notna()]
+            m["DUE_SOURCE"] = "manifest"
+            due = pd.concat([m, due[~due["ASSIGNMENT_NAME"].isin(m["ASSIGNMENT_NAME"])]], ignore_index=True)
+        if "ASSIGNED_AT" in manifest:
+            m = manifest[["ASSIGNMENT_NAME", "ASSIGNED_AT"]].copy()
+            m["ASSIGNED_AT"] = pd.to_datetime(m["ASSIGNED_AT"], errors="coerce")
+            m = m[m["ASSIGNED_AT"].notna()]
+            m["ASSIGNED_SOURCE"] = "manifest"
+            assigned = pd.concat([m, assigned[~assigned["ASSIGNMENT_NAME"].isin(m["ASSIGNMENT_NAME"])]],
+                                 ignore_index=True)
 
     items = (items.merge(due, on="ASSIGNMENT_NAME", how="left")
+                  .merge(assigned, on="ASSIGNMENT_NAME", how="left")
                   .merge(category.rename(columns={"Column": "ASSIGNMENT_NAME"}), on="ASSIGNMENT_NAME", how="left"))
     items["ASSIGNMENT_GROUP_ID"] = items["ASSIGNMENT_GROUP_ID"].fillna("No Category")
     items["DUE_SOURCE"] = items["DUE_SOURCE"].fillna("none")
+    items["ASSIGNED_AT"] = pd.to_datetime(items["ASSIGNED_AT"], errors="coerce")
+    # An estimate at or after the due date means nobody submitted on time: it says nothing about release.
+    bad_estimate = ((items["ASSIGNED_SOURCE"] == "estimated_first_submission") & items["DUE_AT"].notna()
+                    & (items["ASSIGNED_AT"] >= items["DUE_AT"]))
+    items.loc[bad_estimate, "ASSIGNED_AT"] = pd.NaT
+    items["ASSIGNED_SOURCE"] = items["ASSIGNED_SOURCE"].where(~bad_estimate).fillna("none")
 
     assignments = items[items["ACTIVE"]][
-        ["ASSIGNMENT_ID", "ASSIGNMENT_NAME", "DUE_AT", "POINTS_POSSIBLE", "ASSIGNMENT_GROUP_ID", "DUE_SOURCE"]
+        ["ASSIGNMENT_ID", "ASSIGNMENT_NAME", "DUE_AT", "POINTS_POSSIBLE", "ASSIGNMENT_GROUP_ID", "DUE_SOURCE",
+         "ASSIGNED_AT", "ASSIGNED_SOURCE"]
     ].reset_index(drop=True)
+
+    attempts = attempts_raw.merge(assignments[["ASSIGNMENT_ID", "ASSIGNMENT_NAME"]], left_on="Column",
+                                  right_on="ASSIGNMENT_NAME", how="inner")
+    attempts["Username"] = attempts["Username"].astype("string").str.strip()
+    attempts = attempts[attempts["Username"].isin(students["STUDENT_ID"])].rename(columns={"Username": "STUDENT_ID"})
+    attempts = (attempts[ATTEMPT_COLUMNS].astype(empty_attempts().dtypes.to_dict()).reset_index(drop=True)
+                if len(attempts) else empty_attempts())
 
     subs = long[long["STATUS"] == "graded"].merge(
         submitted, left_on=["Username", "ASSIGNMENT_NAME"], right_on=["Username", "Column"], how="left"
@@ -303,7 +357,8 @@ def parse_course(
         "students": students,
         "assignments": assignments,
         "submissions": submissions,
-        "items_report": items,          # every gradable item incl. inactive, for the validation report
+        "attempts": attempts,           # per student + item: first/last attempt time, attempt count
+        "items_report": items,         # every gradable item incl. inactive, for the validation report
         "meta": {"excluded_no_section": excluded_no_section, "current_grade_source": total_source,
                  "current_grade_column": cols.loc[cols["HEADER"] == total_h, "ASSIGNMENT_NAME"].iat[0] if total_h else None},
         "pending_grading": pending,
@@ -326,6 +381,8 @@ def validation_report_dict(parsed: dict[str, pd.DataFrame]) -> dict:
         "due_dates_inferred": int((a["DUE_SOURCE"] == "inferred_auto_zero").sum()),
         "due_dates_manifest": int((a["DUE_SOURCE"] == "manifest").sum()),
         "due_dates_missing": list(a.loc[a["DUE_SOURCE"] == "none", "ASSIGNMENT_NAME"]),
+        "assigned_dates_manifest": int((a["ASSIGNED_SOURCE"] == "manifest").sum()),
+        "assigned_dates_estimated": int((a["ASSIGNED_SOURCE"] == "estimated_first_submission").sum()),
         "graded_cells": int(len(s)),
         "with_submit_time": int(s["SUBMITTED_AT"].notna().sum()),
         "late": int(s["LATE"].sum()),

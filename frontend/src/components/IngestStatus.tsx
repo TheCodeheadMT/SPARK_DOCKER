@@ -34,6 +34,12 @@ export function IngestNotes({ run }: { run: IngestRun | null }) {
     notes.push(`${r.due_dates_inferred} due date(s) inferred from automatic zeros` +
       (r.due_dates_manifest ? `, ${r.due_dates_manifest} from the manifest` : '') + '.')
   if (r.due_dates_missing?.length) notes.push(`No due date yet for: ${r.due_dates_missing.join(', ')}.`)
+  if (r.assigned_dates_estimated || r.assigned_dates_manifest)
+    notes.push('Assigned dates: ' + [
+      r.assigned_dates_manifest ? `${r.assigned_dates_manifest} from the manifest` : '',
+      r.assigned_dates_estimated ? `${r.assigned_dates_estimated} estimated from the class's first submission ` +
+        '(the exports do not include release dates)' : '',
+    ].filter(Boolean).join(', ') + '.')
   if (r.with_submit_time != null && r.graded_cells != null)
     notes.push(`${r.with_submit_time} of ${r.graded_cells} graded items have a submission time; lateness uses only those.`)
   if (r.needs_grading_excluded) notes.push(`${r.needs_grading_excluded} item(s) awaiting grading were left out, not counted as zero.`)

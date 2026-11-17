@@ -54,6 +54,8 @@ export interface IngestReport {
   items_not_yet_active?: string[]
   due_dates_inferred?: number
   due_dates_manifest?: number
+  assigned_dates_manifest?: number
+  assigned_dates_estimated?: number
   due_dates_missing?: string[]
   graded_cells?: number
   with_submit_time?: number
@@ -97,6 +99,10 @@ export interface AssignmentRow {
   DUE_AT: string | null; DUE_SOURCE: string | null; SUBMITTED_AT: string | null; GRADED_AT: string | null
   POINTS_EARNED: number; POINTS_POSSIBLE: number; PERCENTAGE: number | null
   LATE: boolean; MISSED_ASSIGNMENT: boolean; SUBMISSION_DELTA_DAYS: number | null
+  // Timeline: ASSIGNED_SOURCE is manifest | estimated_first_submission | none. FIRST_ATTEMPT_AT is the
+  // first submitted attempt (the exports have no start time); ATTEMPTS is null when not known.
+  ASSIGNED_AT?: string | null; ASSIGNED_SOURCE?: string | null
+  FIRST_ATTEMPT_AT?: string | null; ATTEMPTS?: number | null
 }
 export interface StudentDetail {
   profile: { STUDENT_ID: string; STUDENT_NAME: string; SECTION_NAME: string; CURRENT_SCORE: number | null

@@ -222,5 +222,5 @@ class BlackboardFileAdapter:
         return CourseData(
             sections=p["sections"], enrollments=p["enrollments"], students=p["students"],
             assignments=p["assignments"], submissions=p["submissions"],
-            source_version=version, report=report,
+            source_version=version, report=report, attempts=p["attempts"],
         )

@@ -70,11 +70,22 @@ def roster(db_file: Path, section_id: str | None = None) -> pd.DataFrame:
     return base.merge(feats, on="STUDENT_ID", how="left")
 
 
+TIMELINE_FIELDS = ["ASSIGNED_AT", "ASSIGNED_SOURCE", "FIRST_ATTEMPT_AT", "ATTEMPTS"]
+
+
 def student_rows(db_file: Path, student_id: str) -> pd.DataFrame:
-    df = query_df(db_file, """
+    # Course DBs built before schema 4 have no timeline data until their next ingest.
+    timeline = has_table(db_file, "SUBMISSION_ATTEMPTS")
+    df = query_df(db_file, f"""
         SELECT p.*, a.DUE_SOURCE
+               {", a.ASSIGNED_AT, a.ASSIGNED_SOURCE, t.FIRST_ATTEMPT_AT, t.ATTEMPTS" if timeline else ""}
         FROM STUDENT_PERFORMANCE p LEFT JOIN DIM_ASSIGNMENTS a USING (ASSIGNMENT_ID)
+        {"LEFT JOIN SUBMISSION_ATTEMPTS t ON t.STUDENT_ID = p.STUDENT_ID AND t.ASSIGNMENT_ID = p.ASSIGNMENT_ID"
+         if timeline else ""}
         WHERE p.STUDENT_ID = ?""", [student_id])
+    for col in TIMELINE_FIELDS:
+        if col not in df:
+            df[col] = None
     if df.empty:
         return df
     df["EVENT_AT"] = df["SUBMITTED_AT"].fillna(df["DUE_AT"]).fillna(df["GRADED_AT"])
