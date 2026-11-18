@@ -271,3 +271,9 @@ notes (without identifiers) are sent.
 * Section-level time-management and category-radar charts from the old Performance tab.
 * Course display names (currently the folder name); an optional `course.json` in each
   course folder is the simple fix.
+
+## License
+
+Copyright 2026 Michael Todd.
+
+Licensed under the [Apache License, Version 2.0](LICENSE).
